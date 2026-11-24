@@ -1,0 +1,21 @@
+<div class="card">
+  <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Legal Document Assistant</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+  <p class="hint">Upload a contract (PDF) to get started.</p>
+
+  <label class="file-box" for="fileInput">
+    <span id="fileName">Click to choose a PDF</span>
+    <input type="file" id="fileInput" accept=".pdf" hidden>
+  </label>
+
+  <button class="btn" onclick="upload()">Upload</button>
+  <p id="uploadStatus" class="status"></p>
+
+  <h2>Your documents</h2>
+  <ul id="docList"></ul>
+  <script src="static/app.js"></script>
+</div>

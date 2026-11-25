@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+SQLAlchemy
+pg8000

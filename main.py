@@ -1,23 +1,64 @@
+import os
 import time
 import uuid
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
-from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import BigInteger, Column, DateTime, LargeBinary, MetaData, String, Table, create_engine, select, update
+from sqlalchemy.exc import SQLAlchemyError
 
-app = FastAPI()
+load_dotenv()
+
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    raise RuntimeError("DATABASE_URL is missing. Add your PostgreSQL connection string to .env.")
+
+engine = create_engine(database_url, pool_pre_ping=True)
+metadata = MetaData()
+uploaded_documents = Table(
+    "uploaded_documents",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("name", String(255), nullable=False),
+    Column("size", BigInteger, nullable=False),
+    Column("status", String(20), nullable=False, default="processing"),
+    Column("uploaded_at", DateTime(timezone=True), nullable=False),
+    Column("content", LargeBinary, nullable=False),
+)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        metadata.create_all(engine)
+    except SQLAlchemyError as exc:
+        raise RuntimeError("Could not initialize PostgreSQL. Check DATABASE_URL and database access.") from exc
+    yield
+    engine.dispose()
+
+
+app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-documents = {}          # temporary store: doc_id -> details
 MAX_MB = 20
 
 
-def fake_processing(doc_id: str):
-    """Pretend to chunk and embed the file, then mark it ready."""
+def finish_processing(doc_id: str):
+    """Keep the prototype's simulated processing status, persisted in PostgreSQL."""
     time.sleep(3)
-    if doc_id in documents:
-        documents[doc_id]["status"] = "ready"
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                update(uploaded_documents)
+                .where(uploaded_documents.c.id == doc_id)
+                .values(status="ready")
+            )
+    except SQLAlchemyError:
+        # The document remains safely stored as "processing" if this status update fails.
+        return
 
 
 @app.get("/")
@@ -26,37 +67,62 @@ def home():
 
 
 @app.post("/documents")
-async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(".pdf"):
+def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        file.file.close()
         raise HTTPException(400, "Only PDF files are allowed")
 
-    content = await file.read()
-    if len(content) > MAX_MB * 1024 * 1024:
-        raise HTTPException(413, f"File is too large (max {MAX_MB} MB)")
+    try:
+        content = file.file.read(MAX_MB * 1024 * 1024 + 1)
+        if len(content) > MAX_MB * 1024 * 1024:
+            raise HTTPException(413, f"File is too large (max {MAX_MB} MB)")
 
-    doc_id = str(uuid.uuid4())
-    documents[doc_id] = {
-        "name": file.filename,
-        "size": len(content),
-        "status": "processing",
-        "uploaded_at": datetime.now().strftime("%H:%M:%S"),
-        "content": content,                     # file bytes, kept in memory for now
-    }
+        doc_id = str(uuid.uuid4())
+        uploaded_at = datetime.now(timezone.utc)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    uploaded_documents.insert().values(
+                        id=doc_id,
+                        name=file.filename,
+                        size=len(content),
+                        status="processing",
+                        uploaded_at=uploaded_at,
+                        content=content,
+                    )
+                )
+        except SQLAlchemyError as exc:
+            raise HTTPException(503, "Could not save the document to PostgreSQL") from exc
+    finally:
+        file.file.close()
 
-    background_tasks.add_task(fake_processing, doc_id)
+    background_tasks.add_task(finish_processing, doc_id)
     return {"doc_id": doc_id, "name": file.filename, "status": "processing"}
 
 
 @app.get("/documents")
 def list_documents():
-    # return details only, never the file bytes
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(
+                    uploaded_documents.c.id,
+                    uploaded_documents.c.name,
+                    uploaded_documents.c.size,
+                    uploaded_documents.c.status,
+                    uploaded_documents.c.uploaded_at,
+                ).order_by(uploaded_documents.c.uploaded_at.desc())
+            ).mappings().all()
+    except SQLAlchemyError as exc:
+        raise HTTPException(503, "Could not load documents from PostgreSQL") from exc
+
     return [
         {
-            "id": doc_id,
-            "name": d["name"],
-            "size": d["size"],
-            "status": d["status"],
-            "uploaded_at": d["uploaded_at"],
+            "id": row["id"],
+            "name": row["name"],
+            "size": row["size"],
+            "status": row["status"],
+            "uploaded_at": row["uploaded_at"].astimezone(timezone.utc).strftime("%H:%M:%S UTC"),
         }
-        for doc_id, d in documents.items()
+        for row in rows
     ]

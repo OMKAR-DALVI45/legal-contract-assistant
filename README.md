@@ -17,5 +17,15 @@ An AI assistant that helps people understand contracts. You upload a contract, a
 ## Tech stack
 Python, FastAPI, PostgreSQL, Redis, Qdrant, LangChain, LangGraph, Streamlit
 
+## Run the upload app
+
+The upload endpoint stores each PDF's bytes and metadata in the PostgreSQL table `uploaded_documents`. The table is created automatically when the app starts. The document list is loaded from PostgreSQL, so it survives app restarts.
+
+1. Install dependencies with `pip install -r requirements.txt`.
+2. Set `DATABASE_URL` in `.env` to your PostgreSQL connection string. This project is configured to use the `pg8000` driver (`postgresql+pg8000://...`).
+3. Start the app with `uvicorn main:app --reload` from this folder.
+
+The database user must be able to create and write tables in the selected schema. Uploaded PDFs are limited to 20 MB.
+
 ## Status
 In progress. Started November 2026.

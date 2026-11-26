@@ -1,31 +1,28 @@
-# legal-contract-assistant
-RAG-based AI assistant for contract analysis: clause-aware chunking, hybrid search, cited answers, risk flags and version comparison. Built with FastAPI, LangGraph, PostgreSQL, Redis and Qdrant.
-<br>
 # Legal Contract Assistant
 
-An AI assistant that helps people understand contracts. You upload a contract, ask questions in plain language, and get answers with exact clause citations. If the answer is not in the document, it says so instead of guessing.
+Upload text-based contract PDFs, extract and index their text in ChromaDB, then ask questions in a chat interface. PostgreSQL stores the uploaded PDF and document status. Answers include document and page references and are grounded in retrieved excerpts.
 
-> This tool analyzes documents and is not legal advice.
+> This tool analyzes documents and is not legal advice. Retrieved contract excerpts are sent to Groq to generate answers.
 
-## Planned features
-- Clause-aware PDF parsing and chunking
-- Question answering with section and page citations
-- Hybrid search with reranking, measured with an evaluation set
-- Clause extraction and risk flags
-- Version comparison
+## Project structure
 
-## Tech stack
-Python, FastAPI, PostgreSQL, Redis, Qdrant, LangChain, LangGraph, Streamlit
+```text
+app/
+  main.py       FastAPI routes and startup point
+  database.py   PostgreSQL storage for uploaded PDFs and status
+  rag.py        PDF extraction, chunking, ChromaDB indexing, retrieval, and answers
+  schemas.py    Chat request and response schemas
+static/         Browser upload and chat interface
+data/chroma/    Local ChromaDB data (ignored by Git)
+```
 
-## Run the upload app
+## Setup
 
-The upload endpoint stores each PDF's bytes and metadata in the PostgreSQL table `uploaded_documents`. The table is created automatically when the app starts. The document list is loaded from PostgreSQL, so it survives app restarts.
+1. Create a PostgreSQL database and copy `.env.example` to `.env`.
+2. Set `DATABASE_URL` in `.env` to your PostgreSQL connection string. For this project use the `postgresql+pg8000://...` format.
+3. Set `GROQ_API_KEY` in `.env`. The default answer model is `openai/gpt-oss-120b`; change it with `GROQ_MODEL` if needed.
+4. Install dependencies: `pip install -r requirements.txt`.
+5. Start the app from this folder: `uvicorn app.main:app --reload`.
+6. Open `http://127.0.0.1:8000`, upload a PDF, wait until its status is `ready`, and ask a question.
 
-1. Install dependencies with `pip install -r requirements.txt`.
-2. Set `DATABASE_URL` in `.env` to your PostgreSQL connection string. This project is configured to use the `pg8000` driver (`postgresql+pg8000://...`).
-3. Start the app with `uvicorn main:app --reload` from this folder.
-
-The database user must be able to create and write tables in the selected schema. Uploaded PDFs are limited to 20 MB.
-
-## Status
-In progress. Started November 2026.
+The database user needs permission to create and write tables. Uploads are limited to 20 MB. ChromaDB persists its local index under `data/chroma/`. The first indexing run may download ChromaDB's default embedding model. Scanned PDFs without selectable text need OCR before upload.

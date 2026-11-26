@@ -4,3 +4,6 @@ python-multipart
 python-dotenv
 SQLAlchemy
 pg8000
+chromadb
+pymupdf
+openai

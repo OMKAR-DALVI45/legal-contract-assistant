@@ -1,126 +1,146 @@
-// ---------- Elements ----------
 const fileInput = document.getElementById("fileInput");
 const fileName = document.getElementById("fileName");
 const statusEl = document.getElementById("uploadStatus");
 const docList = document.getElementById("docList");
-const uploadBtn = document.querySelector(".btn");
+const uploadBtn = document.getElementById("uploadButton");
+const chatForm = document.getElementById("chatForm");
+const questionInput = document.getElementById("questionInput");
+const sendBtn = document.getElementById("sendButton");
+const messagesEl = document.getElementById("chatMessages");
 
 const MAX_MB = 20;
 let pollTimer = null;
 
-// ---------- Helpers ----------
 function setStatus(message, type = "") {
   statusEl.textContent = message;
-  statusEl.className = "status " + type;       // "", "ok" or "error"
+  statusEl.className = `status ${type}`;
 }
 
 function formatSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// FastAPI errors look like {detail: "text"} or {detail: [{msg: "..."}]}
 function errorText(data) {
   if (!data || !data.detail) return "Something went wrong";
   if (typeof data.detail === "string") return data.detail;
-  return data.detail.map(d => d.msg).join(", ");
+  return data.detail.map(item => item.msg || item).join(", ");
 }
 
-// ---------- Show the chosen file name ----------
 fileInput.addEventListener("change", () => {
-  const file = fileInput.files[0];
-  fileName.textContent = file ? file.name : "Click to choose a PDF";
+  fileName.textContent = fileInput.files[0]?.name || "Click to choose a PDF";
   setStatus("");
 });
+uploadBtn.addEventListener("click", upload);
 
-// ---------- Upload: send the file to FastAPI ----------
 async function upload() {
   const file = fileInput.files[0];
-
-  if (!file) {
-    setStatus("Choose a PDF first", "error");
-    return;
-  }
-  if (!file.name.toLowerCase().endsWith(".pdf")) {
-    setStatus("Only PDF files are allowed", "error");
-    return;
-  }
-  if (file.size > MAX_MB * 1024 * 1024) {
-    setStatus(`File is too large (max ${MAX_MB} MB)`, "error");
-    return;
-  }
-
-  const form = new FormData();
-  form.append("file", file);                   // must match the FastAPI parameter name
-
+  if (!file) return setStatus("Choose a PDF first", "error");
+  if (!file.name.toLowerCase().endsWith(".pdf")) return setStatus("Only PDF files are allowed", "error");
+  if (file.size > MAX_MB * 1024 * 1024) return setStatus(`File is too large (max ${MAX_MB} MB)`, "error");
+  const formData = new FormData();
+  formData.append("file", file);
   uploadBtn.disabled = true;
-  setStatus("Uploading...");
-
+  setStatus("Uploading and starting PDF indexing…");
   try {
-    const res = await fetch("/documents", { method: "POST", body: form });
-    const data = await res.json().catch(() => null);
-
-    if (!res.ok) {
-      setStatus("Error: " + errorText(data), "error");
-      return;
-    }
-
-    setStatus("Uploaded: " + data.name, "ok");
+    const response = await fetch("/documents", { method: "POST", body: formData });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) return setStatus(`Error: ${errorText(data)}`, "error");
+    setStatus(`Uploaded ${data.name}. Extracting and indexing text…`, "ok");
     fileInput.value = "";
     fileName.textContent = "Click to choose a PDF";
     await loadDocuments();
-  } catch (err) {
+  } catch {
     setStatus("Could not reach the server. Is it running?", "error");
   } finally {
     uploadBtn.disabled = false;
   }
 }
 
-// ---------- Get the list from FastAPI ----------
 async function loadDocuments() {
   try {
-    const res = await fetch("/documents");
-    if (!res.ok) throw new Error("failed");
-    const docs = await res.json();
+    const response = await fetch("/documents");
+    if (!response.ok) throw new Error("Could not load documents");
+    const docs = await response.json();
     renderDocuments(docs);
-
-    // keep checking while any document is still processing
     clearTimeout(pollTimer);
-    if (docs.some(d => d.status === "processing")) {
-      pollTimer = setTimeout(loadDocuments, 2000);
-    }
-  } catch (err) {
+    if (docs.some(doc => doc.status === "processing")) pollTimer = setTimeout(loadDocuments, 2000);
+  } catch {
     docList.textContent = "Could not load documents";
   }
 }
 
-// ---------- Draw the list on the page ----------
 function renderDocuments(docs) {
-  docList.innerHTML = "";
-
-  if (docs.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "No documents yet";
-    docList.appendChild(li);
+  docList.replaceChildren();
+  if (!docs.length) {
+    const empty = document.createElement("li");
+    empty.textContent = "No documents yet";
+    docList.appendChild(empty);
     return;
   }
-
-  docs.forEach(doc => {
-    const li = document.createElement("li");
-
+  for (const doc of docs) {
+    const item = document.createElement("li");
     const info = document.createElement("span");
-    info.textContent = `${doc.name} (${formatSize(doc.size)}, ${doc.uploaded_at})`;
-
+    info.textContent = `${doc.name} (${formatSize(doc.size)})`;
     const badge = document.createElement("span");
-    badge.className = "badge " + doc.status;
+    badge.className = `badge ${doc.status}`;
     badge.textContent = doc.status;
-
-    li.appendChild(info);
-    li.appendChild(badge);
-    docList.appendChild(li);
-  });
+    item.append(info, badge);
+    docList.appendChild(item);
+  }
 }
 
-// ---------- Start ----------
+function addMessage(text, kind) {
+  const message = document.createElement("div");
+  message.className = `message ${kind}`;
+  const body = document.createElement("p");
+  body.textContent = text;
+  message.appendChild(body);
+  messagesEl.appendChild(message);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return message;
+}
+
+chatForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  const question = questionInput.value.trim();
+  if (!question) return;
+  addMessage(question, "user-message");
+  questionInput.value = "";
+  sendBtn.disabled = true;
+  const pending = addMessage("Searching your documents…", "assistant-message pending");
+  try {
+    const response = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    const data = await response.json().catch(() => null);
+    pending.remove();
+    if (!response.ok) {
+      addMessage(errorText(data), "assistant-message error-message");
+      return;
+    }
+    const answer = addMessage(data.answer, "assistant-message");
+    if (data.sources?.length) {
+      const sourceList = document.createElement("ul");
+      sourceList.className = "sources";
+      for (const source of data.sources) {
+        const item = document.createElement("li");
+        item.textContent = `[${source.citation}] ${source.document_name}, page ${source.page}: ${source.excerpt}`;
+        sourceList.appendChild(item);
+      }
+      answer.appendChild(sourceList);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  } catch {
+    pending.remove();
+    addMessage("Could not reach the answer service. Check that the backend is running.", "assistant-message error-message");
+  } finally {
+    sendBtn.disabled = false;
+    questionInput.focus();
+  }
+});
+
 loadDocuments();
